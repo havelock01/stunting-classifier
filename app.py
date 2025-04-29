@@ -34,6 +34,7 @@ if uploaded_file is not None:
         st.subheader("🧾 Dataframe Awal (Setelah Preprocessing)")
         st.dataframe(st.session_state.df, use_container_width=True)
         
+        #Untuk lihat header tabel dalam dataframe setelah di process
         st.subheader("🧾 Daftar Kolom dalam DataFrame")
         st.write(df.columns.tolist())
         
