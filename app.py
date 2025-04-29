@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import tempfile
 import os
-from preprocessing import preprocess_excel_file
+from preprocessing import preprocess_excel_file, generate_label
 
 st.set_page_config(page_title="Stunting Classifier", layout="wide")
 
@@ -17,10 +17,26 @@ if uploaded_file is not None:
 
     try:
         df = preprocess_excel_file(temp_path)
+        st.session_state.df = df  # Simpan dulu ke session state
         st.success("✅ File berhasil diproses!")
+        
+        try:
+            df_labeled = generate_label(
+                df.copy(),
+                total_diberikan_col="KONVERGENSI_LAYANAN_STUNTING_DESA_a._Total_Layanan_Konvergensi_Stunting_di_Desa",
+                total_diterima_col="KONVERGENSI_LAYANAN_STUNTING_DESA_b._Total_Layanan_Konvergensi_Stunting_yang_diterima_di_Desa"
+            )
+            st.session_state.df = df_labeled
+            st.success("✅ Label intervensi berhasil dihitung dan ditambahkan ke DataFrame!")
+        except Exception as e:
+            st.error(f"❌ Gagal menghitung label intervensi: {e}")
+        
         st.subheader("🧾 Dataframe Awal (Setelah Preprocessing)")
-        st.dataframe(df, use_container_width=True)
-
+        st.dataframe(st.session_state.df, use_container_width=True)
+        
+        st.subheader("🧾 Daftar Kolom dalam DataFrame")
+        st.write(df.columns.tolist())
+        
         # --- ANALISIS AWAL ---
         st.subheader("🔍 Analisis Awal Data")
 
