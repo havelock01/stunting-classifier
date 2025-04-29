@@ -123,6 +123,9 @@ def preprocess_excel_file(file_path: str) -> pd.DataFrame:
 
         # Reset index untuk memastikan indexing rapi
         df_raw.reset_index(drop=True, inplace=True)
+        
+        # Ubah semua kolom ke string agar kompatibel dengan Streamlit dan Arrow
+        df_raw = df_raw.astype(str)
 
         return df_raw
 
