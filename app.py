@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import tempfile
 import os
+import numpy as np
 from preprocessing import preprocess_excel_file, generate_label
 from modeling import (
     train_models,
@@ -10,6 +11,36 @@ from modeling import (
     plot_feature_importance,
     plot_decision_tree,
 )
+
+def clean_data(df):
+    # Periksa tipe data pada semua kolom
+    print(df.dtypes)
+
+    # Identifikasi kolom-kolom dengan tipe data campuran
+    mixed_type_columns = []
+    for col in df.columns:
+        unique_types = df[col].map(type).nunique()
+        if unique_types > 1:
+            mixed_type_columns.append(col)
+
+    # Bersihkan kolom-kolom dengan tipe data campuran
+    for col in mixed_type_columns:
+        # Identifikasi nilai unik pada kolom bermasalah
+        print(f"Nilai unik pada kolom '{col}': {df[col].unique()}")
+
+        # Ganti nilai non-numerik dengan NaN
+        df[col] = df[col].replace(['Ya', 'Tidak', 'Ada', 'TIDAK', 'ada', 'ADA', 'iya', 'IYA', 'tidak', 'Iya', 'Tidak '], [np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan])
+
+        # Konversi kolom ke tipe numerik
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    # Hapus baris dengan nilai NaN (opsional, tergantung kebutuhan analisis Anda)
+    df = df.dropna()
+
+    # Reset index jika perlu
+    df = df.reset_index(drop=True)
+
+    return df
 
 st.set_page_config(page_title="Stunting Classifier", layout="wide")
 
@@ -34,6 +65,10 @@ if uploaded_file is not None:
             st.success("✅ Label intervensi berhasil dihitung dan ditambahkan ke DataFrame!")
         except Exception as e:
             st.error(f"❌ Gagal menghitung label intervensi: {e}")
+        
+        # Bersihkan data
+        st.write("Cleaning data...")
+        df = clean_data(df)
 
         # Simpan ke session_state hanya setelah label berhasil (atau setidaknya sudah diproses)
         st.session_state.df = df
@@ -87,6 +122,16 @@ if uploaded_file is not None:
 
         label_col = "label_efektivitas"
         df_model = st.session_state.df.copy()
+        
+        df_model = df_model.dropna() # Pastikan tidak ada nilai NaN sebelum melatih model
+        
+        numeric_columns = df_model.select_dtypes(include=['number']).columns
+        df_model[numeric_columns] = df_model[numeric_columns].apply(pd.to_numeric, errors='coerce')
+        
+        if "label_efektivitas" not in df.columns:
+            st.error("Label tidak berhasil dibuat. Periksa fungsi generate_label().")
+        else:
+            st.success("Label berhasil dibuat!")
 
         if label_col not in df_model.columns:
             st.error("Label belum tersedia. Pastikan data sudah diproses dan diberi label.")
@@ -143,3 +188,4 @@ if uploaded_file is not None:
     finally:
         # Hapus file sementara
         os.remove(temp_path)
+
