@@ -1,8 +1,7 @@
 import streamlit as st
 import pandas as pd
 import tempfile
-import os
-import numpy as np
+
 from preprocessing import preprocess_excel_file, generate_label
 from modeling import (
     train_models,
@@ -12,180 +11,157 @@ from modeling import (
     plot_decision_tree,
 )
 
-def clean_data(df):
-    # Periksa tipe data pada semua kolom
-    print(df.dtypes)
+# Constants
+total_given_col = (
+    'KONVERGENSI_LAYANAN_STUNTING_DESA_a._Total_Layanan_Konvergensi_Stunting_di_Desa'
+)
+total_received_col = (
+    'KONVERGENSI_LAYANAN_STUNTING_DESA_b._Total_Layanan_Konvergensi_Stunting_yang_diterima_di_Desa'
+)
+label_col = 'label_efektivitas'
 
-    # Identifikasi kolom-kolom dengan tipe data campuran
-    mixed_type_columns = []
+# Cleaning function
+def clean_data(df: pd.DataFrame) -> pd.DataFrame:
+    # Standardize categorical mappings
+    cat_map = {
+        'ya': 1, 'iya': 1, 'ada': 1,
+        'tidak': 0, 'tidak ada': 0,
+        'rutin tiap bulan': 1, 'tiap bulan': 1, 'aktif setiap bulan': 1
+    }
+    # Map categorical columns
     for col in df.columns:
-        unique_types = df[col].map(type).nunique()
-        if unique_types > 1:
-            mixed_type_columns.append(col)
-
-    # Bersihkan kolom-kolom dengan tipe data campuran
-    for col in mixed_type_columns:
-        # Identifikasi nilai unik pada kolom bermasalah
-        print(f"Nilai unik pada kolom '{col}': {df[col].unique()}")
-
-        # Ganti nilai non-numerik dengan NaN
-        df[col] = df[col].replace(['Ya', 'Tidak', 'Ada', 'TIDAK', 'ada', 'ADA', 'iya', 'IYA', 'tidak', 'Iya', 'Tidak '], [np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan])
-
-        # Konversi kolom ke tipe numerik
-        df[col] = pd.to_numeric(df[col], errors='coerce')
-
-    # Hapus baris dengan nilai NaN (opsional, tergantung kebutuhan analisis Anda)
-    df = df.dropna()
-
-    # Reset index jika perlu
-    df = df.reset_index(drop=True)
-
+        if 'KONVERGENSI_LAYANAN_STUNTING_DESA' in col and col not in [total_given_col, total_received_col]:
+            df[col] = (
+                df[col]
+                .astype(str)
+                .str.lower()
+                .str.strip()
+                .map(cat_map)
+                .astype(float)
+            )
+    # Numeric conversion for given/received
+    for col in [total_given_col, total_received_col]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+    # Derived ratio
+    if total_given_col in df.columns and total_received_col in df.columns:
+        df['RASIO_LAYANAN'] = df[total_received_col] / df[total_given_col]
+    # Fill NaN in numeric
+    num_cols = df.select_dtypes(include=['number']).columns.tolist()
+    if num_cols:
+        df[num_cols] = df[num_cols].fillna(0)
+    # Drop rows missing label
+    if label_col in df.columns:
+        df = df.dropna(subset=[label_col])
+    # Drop free-text
+    df = df.loc[:, ~df.columns.str.contains('kendala', case=False)]
+    # Force numeric types
+    num_cols = df.select_dtypes(include=['number']).columns.tolist()
+    if num_cols:
+        df[num_cols] = df[num_cols].astype('float64')
+    # Rebuild DataFrame to pure NumPy-backed
+    df = pd.DataFrame(df.values, columns=df.columns)
+    # Drop unnamed or pure-numeric column names
+    df = df.loc[:, ~df.columns.str.match(r'^(Unnamed|\d+)$')]
     return df
 
+# Streamlit UI
 st.set_page_config(page_title="Stunting Classifier", layout="wide")
-
 st.title("📊 Aplikasi Klasifikasi Efektivitas Intervensi Stunting Desa")
 
-uploaded_file = st.file_uploader("Unggah file Excel", type=["xlsx", "xls"])
+uploaded = st.file_uploader("Unggah file Excel", type=["xlsx", "xls"])
+if uploaded:
+    # Save to temp file
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp:
+        tmp.write(uploaded.read())
+        path = tmp.name
+    # Load & clean
+    try:
+        df = preprocess_excel_file(path)
+        df = generate_label(df, total_given_col, total_received_col)
+        df = clean_data(df)
+        if df.empty:
+            st.error('Data kosong setelah preprocessing.')
+            st.stop()
+        st.success('✅ Data siap diproses!')
+    except Exception as e:
+        st.error(f'❌ Gagal preprocessing: {e}')
+        st.stop()
 
-if uploaded_file is not None:
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_file:
-        tmp_file.write(uploaded_file.read())
-        temp_path = tmp_file.name
+        # Preview & Debug
+    st.subheader('Preview Data')
+    st.table(df.head())  # static table, no Arrow
+    st.text(df.dtypes.to_string())
+    st.metric('Jumlah Baris', len(df))
+
+    # Descriptive Stats
+    num_df = df.select_dtypes(include=['number'])
+    if not num_df.empty:
+        st.subheader('Statistik Deskriptif')
+        st.write(num_df.describe())  # safe rendering
+    else:
+        st.warning('⚠️ Tidak ada kolom numerik untuk statistik.')
+
+    # Modeling
+    st.subheader('Modeling Klasifikasi')
+    if label_col not in df.columns:
+        st.error('Label tidak ditemukan.')
+        st.stop()
+
+    mode = st.radio('Mode Pemilihan Fitur', ['Otomatis', 'Manual'])
+    feat_cols = df.select_dtypes(include=['number']).columns.tolist()
+    for c in [total_given_col, total_received_col, 'RASIO_LAYANAN', label_col]:
+        if c in feat_cols:
+            feat_cols.remove(c)
+    if mode == 'Otomatis':
+        features = feat_cols
+    else:
+        features = st.multiselect('Pilih fitur:', options=feat_cols, default=feat_cols[:5])
+    if not features:
+        st.error('Pilih minimal satu fitur.')
+        st.stop()
+
+    X = df[features]
+    y = df[label_col]
+    if X.shape[1] == 0 or X.dropna(how='all').shape[0] == 0:
+        st.error('Data fitur kosong.')
+        st.stop()
 
     try:
-        df = preprocess_excel_file(temp_path)
-        
-        try:
-            df = generate_label(
-                df.copy(),
-                total_diberikan_col="KONVERGENSI_LAYANAN_STUNTING_DESA_a._Total_Layanan_Konvergensi_Stunting_di_Desa",
-                total_diterima_col="KONVERGENSI_LAYANAN_STUNTING_DESA_b._Total_Layanan_Konvergensi_Stunting_yang_diterima_di_Desa"
-            )
-            st.success("✅ Label intervensi berhasil dihitung dan ditambahkan ke DataFrame!")
-        except Exception as e:
-            st.error(f"❌ Gagal menghitung label intervensi: {e}")
-        
-        # Bersihkan data
-        st.write("Cleaning data...")
-        df = clean_data(df)
+        dt_model, rf_model, X_test, y_test = train_models(df, features, label_col)
+        st.success('✅ Model berhasil dilatih!')
 
-        # Simpan ke session_state hanya setelah label berhasil (atau setidaknya sudah diproses)
-        st.session_state.df = df
-        st.success("✅ File berhasil diproses dan disiapkan!")
-        
-        st.subheader("🧾 Dataframe Awal (Setelah Preprocessing)")
-        st.dataframe(st.session_state.df, use_container_width=True)
-        
-        # #Untuk lihat header tabel dalam dataframe setelah di process (proses debug untuk ambil kolom header)
-        # st.subheader("🧾 Daftar Kolom dalam DataFrame")
-        # st.write(df.columns.tolist())
-        
-        # --- ANALISIS AWAL ---
-        st.subheader("🔍 Analisis Awal Data")
+                # Decision Tree
+        st.subheader('Decision Tree')
+        rpt_dt, cm_dt, cls_dt = evaluate_model(dt_model, X_test, y_test)
+        # Display classification report as text to avoid Arrow serialization
+        dt_report_df = pd.DataFrame(rpt_dt).transpose()
+        st.text(dt_report_df.to_string())
+        st.pyplot(plot_confusion_matrix(cm_dt, 'Decision Tree', cls_dt))
 
-        # Jumlah baris dan kolom
-        num_rows, num_cols = df.shape
-        st.write(f"Jumlah baris: **{num_rows}**, Jumlah kolom: **{num_cols}**")
+        st.subheader('Decision Tree')
+        rpt_dt, cm_dt, cls_dt = evaluate_model(dt_model, X_test, y_test)
+        st.write(pd.DataFrame(rpt_dt).transpose())
+        st.pyplot(plot_confusion_matrix(cm_dt, 'Decision Tree', cls_dt))
 
-        # Deteksi kolom dengan tipe data campuran
-        mixed_type_columns = []
-        for col in df.columns:
-            unique_types = df[col].map(type).nunique()
-            if unique_types > 1:
-                mixed_type_columns.append(col)
+                # Random Forest
+        st.subheader('Random Forest')
+        rpt_rf, cm_rf, cls_rf = evaluate_model(rf_model, X_test, y_test)
+        rf_report_df = pd.DataFrame(rpt_rf).transpose()
+        st.text(rf_report_df.to_string())
+        st.pyplot(plot_confusion_matrix(cm_rf, 'Random Forest', cls_rf))
 
-        if mixed_type_columns:
-            st.warning("⚠️ Ditemukan kolom dengan tipe data campuran:")
-            for col in mixed_type_columns:
-                st.write(f"- {col}")
-        else:
-            st.success("✅ Tidak ada kolom bertipe campuran.")
+        st.subheader('Random Forest')
+        rpt_rf, cm_rf, cls_rf = evaluate_model(rf_model, X_test, y_test)
+        st.write(pd.DataFrame(rpt_rf).transpose())
+        st.pyplot(plot_confusion_matrix(cm_rf, 'Random Forest', cls_rf))
 
-        # Statistik deskriptif
-        st.subheader("📈 Statistik Deskriptif (Numerik)")
-        try:
-            df_numeric = df.apply(pd.to_numeric, errors="coerce")
-            st.dataframe(df_numeric.describe(), use_container_width=True)
-        except Exception as e:
-            st.error(f"Gagal menghitung statistik deskriptif: {e}")
+        # Feature Importance
+        st.subheader('Feature Importance (RF)')
+        st.pyplot(plot_feature_importance(rf_model, features))
 
-        # Distribusi nilai unik dari beberapa kolom awal (optional)
-        st.subheader("🔢 Distribusi Nilai Unik Beberapa Kolom Awal")
-        cols_to_check = df.columns[:5]  # contoh 5 kolom pertama
-        for col in cols_to_check:
-            st.write(f"**{col}** - Jumlah nilai unik: {df[col].nunique()}")
-            st.dataframe(df[col].value_counts().reset_index().rename(columns={'index': 'Nilai', col: 'Frekuensi'}))
-
-         # ------------------ Modeling ------------------ #
-        st.subheader("🧠 Modeling Klasifikasi")
-
-        label_col = "label_efektivitas"
-        df_model = st.session_state.df.copy()
-        
-        df_model = df_model.dropna() # Pastikan tidak ada nilai NaN sebelum melatih model
-        
-        numeric_columns = df_model.select_dtypes(include=['number']).columns
-        df_model[numeric_columns] = df_model[numeric_columns].apply(pd.to_numeric, errors='coerce')
-        
-        if "label_efektivitas" not in df.columns:
-            st.error("Label tidak berhasil dibuat. Periksa fungsi generate_label().")
-        else:
-            st.success("Label berhasil dibuat!")
-
-        if label_col not in df_model.columns:
-            st.error("Label belum tersedia. Pastikan data sudah diproses dan diberi label.")
-        else:
-            # Konversi label ke string (antisipasi error)
-            df_model[label_col] = df_model[label_col].astype(str)
-
-            feature_selection_mode = st.radio("Pilih cara pemilihan fitur:", ["Otomatis", "Manual"])
-
-            if feature_selection_mode == "Otomatis":
-                features = df_model.select_dtypes(include="number").columns.tolist()
-                if label_col in features:
-                    features.remove(label_col)
-            else:
-                all_columns = df_model.columns.tolist()
-                features = st.multiselect("Pilih fitur secara manual:", options=[col for col in all_columns if col != label_col])
-
-            if features:
-                with st.spinner("Melatih model..."):
-                    try:
-                        dt_model, rf_model, X_test, y_test = train_models(df_model, features, label_col)
-                        st.success("✅ Model berhasil dilatih!")
-
-                        # Evaluasi Decision Tree
-                        st.subheader("📋 Evaluasi Model: Decision Tree")
-                        dt_report, dt_cm = evaluate_model(dt_model, X_test, y_test)
-                        st.text("Classification Report")
-                        st.json(dt_report)
-
-                        st.pyplot(plot_confusion_matrix(dt_cm, "Decision Tree"))
-
-                        # Evaluasi Random Forest
-                        st.subheader("🌲 Evaluasi Model: Random Forest")
-                        rf_report, rf_cm = evaluate_model(rf_model, X_test, y_test)
-                        st.text("Classification Report")
-                        st.json(rf_report)
-
-                        st.pyplot(plot_confusion_matrix(rf_cm, "Random Forest"))
-
-                        # Visualisasi feature importance
-                        st.subheader("📊 Feature Importance (Random Forest)")
-                        st.pyplot(plot_feature_importance(rf_model, features))
-
-                        # Visualisasi decision tree
-                        st.subheader("🌳 Visualisasi Decision Tree")
-                        st.pyplot(plot_decision_tree(dt_model, features, class_names=["Efektif", "Kurang Efektif", "Tidak Efektif"]))
-                    except Exception as e:
-                        st.error(f"❌ Gagal melakukan pelatihan atau evaluasi model: {e}")
-            else:
-                st.warning("⚠️ Belum ada fitur yang dipilih.")
-        
+        # Decision Tree Visualization
+        st.subheader('Visualisasi Decision Tree')
+        st.pyplot(plot_decision_tree(dt_model, features, class_names=cls_dt))
     except Exception as e:
-        st.error(f"Terjadi kesalahan saat memproses file: {e}")
-    finally:
-        # Hapus file sementara
-        os.remove(temp_path)
-
+        st.error(f'Gagal pelatihan: {e}')
