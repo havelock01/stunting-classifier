@@ -18,17 +18,20 @@ Aplikasi berbasis Streamlit untuk melakukan klasifikasi efektivitas respon inter
 
 ---
 
-## 🗂️ Struktur Folder
+## 🗂️ Struktur Folder pada branch ini
 
-stunting-classifier/
-├── app.py
+stunting\*classifier/
+│
+├── app.py # Halaman utama (navigasi)
+├── requirements.txt
+│
 ├── preprocessing.py
 ├── modeling.py
-├── utils.py
-├── requirements.txt
-├── README.md
-└── env/ (virtual environment)
-└──raw_data
+│
+├── pages/ # Halaman khusus
+│ ├── 1. FirstPage.py # Unggah file raw data dan preprocessing
+│ ├── 2. SecondPage.py # Analisis Data
+│ └── 3. ThirdPage.py # Modeling Klasifikasi
 
 ---
 
@@ -74,3 +77,5 @@ streamlit run app.py
 📌 Ketentuan Dataset
 Format Excel dengan header di baris ke-3.
 Kolom indikator berisi kata kunci seperti “ada”, “rutin”, atau “aktif”.
+
+📝 Sumber data : [Satu Data Indonesia](https://data.go.id/dataset/dataset/jumlah-penerima-layanan-pencegahan-stunting-tahun-2023)
